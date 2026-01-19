@@ -1,0 +1,33 @@
+# PYTHON DEPENDENCIES
+# ===================
+#
+# Purpose:
+#     Lists all Python packages required for this project.
+#     Ensures reproducible environment across machines.
+#
+# Usage:
+#     pip install -r requirements.txt
+#
+# Update:
+#     pip freeze > requirements.txt
+#
+# Categories:
+#     - Web framework: FastAPI, Uvicorn
+#     - ML: scikit-learn, pandas, numpy
+#     - Data validation: pydantic
+#     - Utilities: python-multipart (for file uploads)
+
+# Web Framework
+fastapi==0.109.0         # Modern async web framework for APIs
+uvicorn[standard]==0.27.0 # ASGI server to run FastAPI
+
+# Machine Learning
+pandas==2.1.4            # Data manipulation
+scikit-learn==1.4.0      # ML models and preprocessing
+numpy==1.26.3            # Numerical operations
+
+# Data Validation
+pydantic==2.5.3          # Data validation using Python type hints
+
+# Utilities
+python-multipart==0.0.6  # For handling file uploads (future use)
