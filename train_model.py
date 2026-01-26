@@ -66,6 +66,7 @@ Example Usage:
     ✅ Model saved to models/
 """
 
+# Import and setup
 import pandas as pd
 import numpy as np
 import pickle
@@ -78,21 +79,31 @@ warnings.filterwarnings('ignore')
 
 print("🚀 Training Churn Prediction Model...")
 
-# Load data
+# Load and explor data
+# Data is a CSV but in production we would connect to a datawarehouse
 df = pd.read_csv('data/telco_churn.csv')
-print(f"✅ Loaded {len(df)} customers")
+print(f" Loaded {len(df)} customers")
 
 # Quick preprocessing
+"""
+Transform total charges column from string to numeric
+Fill in missing total charges with median. Median is robust to outliers
+"""
 df = df.drop('customerID', axis=1, errors='ignore')
 if df['TotalCharges'].dtype == 'object':
     df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
     df['TotalCharges'].fillna(df['TotalCharges'].median(), inplace=True)
 
-# Prepare data
+# Prepare Features and Target
+# all features are included and target is the churn columns
 X = df.drop('Churn', axis=1)
 y = df['Churn'].map({'Yes': 1, 'No': 0})
 
 # Encode categorical variables
+"""
+Find and encode each categorical columns, learn values and convert to numbers.
+Save each encoder in label encoder dictionary, save for inference time later.
+"""
 categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
 label_encoders = {}
 for col in categorical_cols:
@@ -100,15 +111,15 @@ for col in categorical_cols:
     X[col] = le.fit_transform(X[col].astype(str))
     label_encoders[col] = le
 
-print(f"✅ Preprocessed {len(X.columns)} features")
+print(f" Preprocessed {len(X.columns)} features")
 
-# Split
+# Train-Test Split
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
 
 # Train Random Forest
-print("🤖 Training Random Forest...")
+print(" Training Random Forest...")
 model = RandomForestClassifier(
     n_estimators=100,
     max_depth=10,

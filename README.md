@@ -121,3 +121,81 @@ RUNTIME:
 download_data.py:  Run once (or when data updates)
 train_model.py:    Run when retraining needed
 app/main.py:       Runs continuously as server
+
+
+
+
+
+# DATA FLOW QUESTIONS
+
+1. What happens when download_data.py runs?
+   - Where does data come from?
+   - What does the CSV contain?
+   - How many rows/columns?
+
+2. What happens when train_model.py runs?
+   - What files does it READ?
+   - What files does it CREATE?
+   - Why do we save 4 different .pkl files?
+
+3. What happens when app/main.py starts?
+   - What does @app.on_event("startup") do?
+   - Why load model once instead of per request?
+   - What are the global variables for?
+
+4. What happens when someone calls GET /health?
+   - Trace the code from HTTP request to response
+   - What does it return?
+   - Why is this useful?
+
+
+
+# CODE CONNECTION QUESTIONS
+
+1. How does train_model.py connect to app/main.py?
+   - What "bridge" connects them? (Answer: the .pkl files!)
+   - Could I train a new model without changing the API code?
+   - Could I deploy the API without retraining?
+
+2. Why separate train_model.py from app/main.py?
+   - What if I wanted to retrain weekly?
+   - What if I wanted to A/B test two models?
+
+3. What does label_encoders.pkl contain?
+   - Why do we need it?
+   - What would happen without it?
+   - When is it used?
+```
+
+#### **Part 3: Draw the Architecture (20 min)**
+
+**On paper, draw:**
+```
+┌─────────────────┐
+│  download_data  │
+└────────┬────────┘
+         │ Creates
+         ▼
+┌─────────────────┐
+│ telco_churn.csv │
+└────────┬────────┘
+         │ Read by
+         ▼
+┌─────────────────┐
+│  train_model.py │
+└────────┬────────┘
+         │ Creates
+         ▼
+┌─────────────────┐
+│   models/*.pkl  │
+└────────┬────────┘
+         │ Loaded by
+         ▼
+┌─────────────────┐
+│   app/main.py   │
+└────────┬────────┘
+         │ Serves
+         ▼
+┌─────────────────┐
+│   HTTP Client   │
+└─────────────────┘

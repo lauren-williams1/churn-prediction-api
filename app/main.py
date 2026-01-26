@@ -72,12 +72,40 @@ Testing:
     {"status":"healthy","model_loaded":true}
 
 Production Considerations (from Chip Huyen):
-    - Load model once on startup (not per request) ✅
+    - Load model once on startup (not per request) 
     - Use async endpoints for I/O operations (future)
     - Add request logging (future)
     - Add monitoring/metrics (future)
     - Consider batch prediction endpoint (future)
 """
+
+
+"""
+Adding Logging so we can debug more easily when there is a failure or error.
+
+"""
+# Add to app/main.py at the top
+import logging
+from datetime import datetime
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Then use throughout:
+@app.get("/health")
+def health():
+    logger.info("Health check requested")
+    return {
+        "status": "healthy",
+        "model_loaded": model is not None,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
 
 from fastapi import FastAPI
 import pickle
@@ -145,29 +173,6 @@ def root():
         }
     }
 
-@app.get("/health")
-def health():
-    """
-    Health check endpoint.
-    
-    Used by:
-        - Load balancers to check if service is up
-        - Monitoring systems (Prometheus, Datadog, etc.)
-        - Deployment pipelines (readiness probes)
-    
-    Returns:
-        dict: Health status and model load state
-        
-    Example Response:
-        {
-            "status": "healthy",
-            "model_loaded": true
-        }
-    """
-    return {
-        "status": "healthy",
-        "model_loaded": model is not None
-    }
 
 @app.get("/model/info")
 def model_info():
@@ -200,3 +205,53 @@ def model_info():
     with open('models/metadata.pkl', 'rb') as f:
         metadata = pickle.load(f)
     return metadata
+
+# Add to app/main.py
+
+@app.get("/model/feature-importance")
+def feature_importance():
+    """
+    Get top 10 most important features for predictions.
+    
+    Useful for understanding what drives churn.
+    """
+    if not hasattr(model, 'feature_importances_'):
+        return {"error": "Model does not support feature importance"}
+    
+    importance_df = pd.DataFrame({
+        'feature': features,
+        'importance': model.feature_importances_
+    }).sort_values('importance', ascending=False).head(10)
+    
+    return {
+        "top_features": importance_df.to_dict(orient='records'),
+        "interpretation": "These features have the most influence on churn predictions"
+    }
+
+
+"""
+Get Stats endpoint
+Created get stats to see what the stats are the model predicted. 
+Want to see insights from the model and show how they relate to business metrics
+"""
+@app.get("/stats")
+def get_stats():
+    """
+    Get dataset and model statistics.
+    
+    Shows business metrics that stakeholders care about.
+    """
+    with open('models/metadata.pkl', 'rb') as f:
+        metadata = pickle.load(f)
+    
+    # Calculate additional stats from training data
+    df = pd.read_csv('data/telco_churn.csv')
+    
+    return {
+        "total_customers": len(df),
+        "churn_rate": f"{(df['Churn'] == 'Yes').mean():.1%}",
+        "avg_tenure": f"{df['tenure'].mean():.1f} months",
+        "avg_monthly_charge": f"${df['MonthlyCharges'].mean():.2f}",
+        "model_accuracy": f"{metadata['accuracy']:.1%}",
+        "model_auc": f"{metadata['roc_auc']:.3f}"
+    }
