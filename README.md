@@ -82,7 +82,7 @@ This project applies concepts from *Designing Machine Learning Systems* by Chip 
 - Health check endpoints
 - Production considerations
 
-## 🔜 Next Steps (Tuesday)
+## 🔜 Next Steps
 
 - [ ] Add POST /predict endpoint
 - [ ] Implement Pydantic validation
@@ -92,7 +92,7 @@ This project applies concepts from *Designing Machine Learning Systems* by Chip 
 
 ## 👤 Author
 
-Lauren Williams - Microsoft Office of CTO Interview Project
+Lauren Williams 
 
 ## 📅 Timeline
 
