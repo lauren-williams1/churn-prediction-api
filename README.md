@@ -45,8 +45,8 @@ churn-prediction-api/
 │   └── metadata.pkl           # Performance metrics
 ├── app/
 │   ├── main.py                # FastAPI application
-│   ├── models.py              # Pydantic schemas (tomorrow)
-│   └── ml_model.py            # ML inference logic (tomorrow)
+│   ├── models.py              # Pydantic schemas 
+│   └── ml_model.py            # ML inference logic 
 ├── train_model.py             # Training pipeline
 ├── requirements.txt           # Python dependencies
 └── README.md                  # This file
