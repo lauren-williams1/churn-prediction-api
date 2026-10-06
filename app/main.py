@@ -95,19 +95,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Then use throughout:
-@app.get("/health")
-def health():
-    logger.info("Health check requested")
-    return {
-        "status": "healthy",
-        "model_loaded": model is not None,
-        "timestamp": datetime.now().isoformat()
-    }
-
-
-
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 import pickle
 import pandas as pd
 
@@ -205,6 +194,19 @@ def model_info():
     with open('models/metadata.pkl', 'rb') as f:
         metadata = pickle.load(f)
     return metadata
+
+
+# Then use throughout:
+@app.get("/health")
+def health():
+    logger.info("Health check requested")
+    return {
+        "status": "healthy",
+        "model_loaded": model is not None,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
 
 # Add to app/main.py
 
