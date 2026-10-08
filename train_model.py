@@ -1,3 +1,9 @@
+"""Churn training pipeline: CV model selection, MLflow tracking, model registry.
+
+Run:  python train_model.py
+Then: python promote_model.py   (gate: candidate must match or beat champion)
+"""
+
 """
 MODEL TRAINING PIPELINE
 ========================
@@ -66,229 +72,181 @@ Example Usage:
     ✅ Model saved to models/
 """
 
+import json
+import os
+from pathlib import Path
 
+import joblib
+import mlflow
+import mlflow.sklearn
 import pandas as pd
-import numpy as np
-import pickle
-import sklearn
-
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.linear_model import LogisticRegression
+from mlflow.tracking import MlflowClient
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
-import warnings
-warnings.filterwarnings('ignore')
-
-print("="*60)
-print("CHURN PREDICTION MODEL TRAINING")
-print("="*60)
-
-# ============================================================================
-# 1. LOAD DATA
-# ============================================================================
-print("\n Loading data...")
-df = pd.read_csv('data/telco_churn.csv')
-print(f"✅ Loaded {len(df)} rows, {len(df.columns)} columns")
-print(f"\nChurn distribution:\n{df['Churn'].value_counts()}")
-print(f"Churn rate: {(df['Churn'] == 'Yes').mean():.1%}")
-
-# ============================================================================
-# 2. DATA PREPROCESSING
-# ============================================================================
-print("\n Preprocessing data...")
-
-# Drop customer ID (not a feature)
-df = df.drop('customerID', axis=1, errors='ignore')
-
-# Handle TotalCharges (sometimes stored as string)
-if df['TotalCharges'].dtype == 'object':
-    df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
-    df['TotalCharges'].fillna(df['TotalCharges'].median(), inplace=True)
-
-# Separate features and target
-X = df.drop('Churn', axis=1)
-y = df['Churn'].map({'Yes': 1, 'No': 0})
-
-print(f"Features shape: {X.shape}")
-print(f"Target shape: {y.shape}")
-
-# Identify categorical and numerical columns
-categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
-numerical_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
-
-print(f"\nCategorical features ({len(categorical_cols)}): {categorical_cols[:5]}...")
-print(f"Numerical features ({len(numerical_cols)}): {numerical_cols}")
-
-# Encode categorical variables
-label_encoders = {}
-for col in categorical_cols:
-    le = LabelEncoder()
-    X[col] = le.fit_transform(X[col].astype(str))
-    label_encoders[col] = le
-
-print(" Encoded categorical variables")
-
-# ============================================================================
-# 3. TRAIN-TEST SPLIT
-# ============================================================================
-print("\n Splitting data...")
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
 )
-print(f"Train set: {len(X_train)} samples")
-print(f"Test set: {len(X_test)} samples")
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
-# ============================================================================
-# 4. FEATURE SCALING
-# ============================================================================
-print("\n  Scaling features...")
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
-print(" Features scaled (mean=0, std=1)")
+DATA_PATH = Path(os.getenv("DATA_PATH", "data/telco_churn.csv"))
+MODELS_DIR = Path("models")
+MODEL_NAME = os.getenv("MODEL_NAME", "churn-model")
+TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+EXPERIMENT = "churn-prediction"
+RANDOM_STATE = 42
+NUMERIC = ["SeniorCitizen", "tenure", "MonthlyCharges", "TotalCharges"]
 
-# ============================================================================
-# 5. MODEL TRAINING
-# ============================================================================
-print("\n Training models...")
 
-# Model 1: Logistic Regression (fast, interpretable)
-print("\n Logistic Regression...")
-lr_model = LogisticRegression(
-    max_iter=1000,
-    class_weight='balanced',  # Handle class imbalance
-    random_state=42
-)
-lr_model.fit(X_train_scaled, y_train)
+def load_data(path: Path = DATA_PATH):
+    df = pd.read_csv(path)
+    df = df.drop(columns=["customerID"], errors="ignore")
+    # Telco has blank TotalCharges for tenure-0 customers
+    df["TotalCharges"] = pd.to_numeric(df["TotalCharges"], errors="coerce").fillna(0.0)
+    y = (df["Churn"] == "Yes").astype(int)
+    X = df.drop(columns=["Churn"])
+    categorical = [c for c in X.columns if c not in NUMERIC]
+    return X, y, categorical
 
-lr_pred = lr_model.predict(X_test_scaled)
-lr_pred_proba = lr_model.predict_proba(X_test_scaled)[:, 1]
-lr_auc = roc_auc_score(y_test, lr_pred_proba)
 
-print(f"   Accuracy: {lr_model.score(X_test_scaled, y_test):.3f}")
-print(f"   ROC-AUC: {lr_auc:.3f}")
+def build_candidates(categorical):
+    """Each candidate is one Pipeline: preprocessing + model, saved as one artifact."""
+    rf_pre = ColumnTransformer(
+        [
+            ("num", "passthrough", NUMERIC),
+            (
+                "cat",
+                OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
+                categorical,
+            ),
+        ]
+    )
+    lr_pre = ColumnTransformer(
+        [
+            ("num", StandardScaler(), NUMERIC),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+        ]
+    )
+    return {
+        "random_forest": Pipeline(
+            [
+                ("pre", rf_pre),
+                (
+                    "clf",
+                    RandomForestClassifier(
+                        n_estimators=300,
+                        min_samples_leaf=5,
+                        class_weight="balanced",
+                        random_state=RANDOM_STATE,
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
+        ),
+        "logistic_regression": Pipeline(
+            [
+                ("pre", lr_pre),
+                (
+                    "clf",
+                    LogisticRegression(
+                        max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE
+                    ),
+                ),
+            ]
+        ),
+    }
 
-# Model 2: Random Forest (better accuracy)
-print("\  Random Forest...")
-rf_model = RandomForestClassifier(
-    n_estimators=100,
-    max_depth=10,
-    min_samples_split=20,
-    class_weight='balanced',
-    random_state=42,
-    n_jobs=-1
-)
-rf_model.fit(X_train, y_train)  # No scaling needed for RF
 
-rf_pred = rf_model.predict(X_test)
-rf_pred_proba = rf_model.predict_proba(X_test)[:, 1]
-rf_auc = roc_auc_score(y_test, rf_pred_proba)
+def main():
+    mlflow.set_tracking_uri(TRACKING_URI)
+    mlflow.set_experiment(EXPERIMENT)
 
-print(f"   Accuracy: {rf_model.score(X_test, y_test):.3f}")
-print(f"   ROC-AUC: {rf_auc:.3f}")
+    X, y, categorical = load_data()
+    X_tr, X_te, y_tr, y_te = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
+    )
 
-# Choose best model
-print("\n Model Selection:")
-if rf_auc > lr_auc:
-    print(f"    Random Forest selected (AUC: {rf_auc:.3f})")
-    best_model = rf_model
-    best_name = "RandomForest"
-    use_scaling = False
-else:
-    print(f"   Logistic Regression selected (AUC: {lr_auc:.3f})")
-    best_model = lr_model
-    best_name = "LogisticRegression"
-    use_scaling = True
+    # Model selection on TRAIN ONLY via stratified CV; test set is touched once below.
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    candidates = build_candidates(categorical)
+    cv_auc = {}
+    for name, pipe in candidates.items():
+        scores = cross_val_score(pipe, X_tr, y_tr, cv=cv, scoring="roc_auc")
+        cv_auc[name] = (float(scores.mean()), float(scores.std()))
+        print(f"{name}: CV AUC {scores.mean():.4f} +/- {scores.std():.4f}")
+    best = max(cv_auc, key=lambda n: cv_auc[n][0])
+    pipe = candidates[best]
 
-# ============================================================================
-# 6. EVALUATION
-# ============================================================================
-print("\n Detailed Evaluation:")
-if use_scaling:
-    final_pred = lr_model.predict(X_test_scaled)
-    final_proba = lr_model.predict_proba(X_test_scaled)[:, 1]
-else:
-    final_pred = rf_model.predict(X_test)
-    final_proba = rf_model.predict_proba(X_test)[:, 1]
+    with mlflow.start_run(run_name=f"train-{best}") as run:
+        mlflow.log_params(
+            {
+                "model_type": best,
+                "n_train": len(X_tr),
+                "n_test": len(X_te),
+                "churn_rate": round(float(y.mean()), 4),
+                "random_state": RANDOM_STATE,
+                "class_weight": "balanced",
+                "threshold": 0.5,
+            }
+        )
+        for name, (mean, std) in cv_auc.items():
+            mlflow.log_metric(f"cv_roc_auc_{name}", mean)
+            mlflow.log_metric(f"cv_roc_auc_std_{name}", std)
 
-print("\nClassification Report:")
-print(classification_report(y_test, final_pred, target_names=['No Churn', 'Churn']))
+        pipe.fit(X_tr, y_tr)
+        proba = pipe.predict_proba(X_te)[:, 1]
+        pred = (proba >= 0.5).astype(int)
+        metrics = {
+            "test_roc_auc": roc_auc_score(y_te, proba),
+            "test_accuracy": accuracy_score(y_te, pred),
+            "test_precision": precision_score(y_te, pred),
+            "test_recall": recall_score(y_te, pred),
+            "test_f1": f1_score(y_te, pred),
+        }
+        mlflow.log_metrics({k: float(v) for k, v in metrics.items()})
+        tn, fp, fn, tp = confusion_matrix(y_te, pred).ravel()
+        mlflow.log_dict(
+            {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
+            "confusion_matrix.json",
+        )
 
-print("\nConfusion Matrix:")
-cm = confusion_matrix(y_test, final_pred)
-print(cm)
-print(f"\nTrue Negatives: {cm[0,0]}")
-print(f"False Positives: {cm[0,1]}")
-print(f"False Negatives: {cm[1,0]}")
-print(f"True Positives: {cm[1,1]}")
+        mlflow.sklearn.log_model(
+            pipe, artifact_path="model", registered_model_name=MODEL_NAME
+        )
 
-# ============================================================================
-# 7. FEATURE IMPORTANCE (if Random Forest)
-# ============================================================================
-if best_name == "RandomForest":
-    print("\n Top 10 Important Features:")
-    feature_importance = pd.DataFrame({
-        'feature': X.columns,
-        'importance': rf_model.feature_importances_
-    }).sort_values('importance', ascending=False)
-    
-    for idx, row in feature_importance.head(10).iterrows():
-        print(f"   {row['feature']:20s}: {row['importance']:.4f}")
+        client = MlflowClient()
+        versions = client.search_model_versions(f"run_id='{run.info.run_id}'")
+        version = max(int(v.version) for v in versions)
+        client.set_registered_model_alias(MODEL_NAME, "candidate", str(version))
 
-# ============================================================================
-# 8. SAVE MODEL ARTIFACTS
-# ============================================================================
-print("\n Saving model artifacts...")
+        # Local export so the Docker image can run without an MLflow server
+        MODELS_DIR.mkdir(exist_ok=True)
+        joblib.dump(pipe, MODELS_DIR / "pipeline.joblib")
+        (MODELS_DIR / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "model_name": MODEL_NAME,
+                    "model_type": best,
+                    "version": str(version),
+                    "run_id": run.info.run_id,
+                    "metrics": {k: float(v) for k, v in metrics.items()},
+                },
+                indent=2,
+            )
+        )
 
-# Save model
-model_path = f'models/{best_name.lower()}_model.pkl'
-with open(model_path, 'wb') as f:
-    pickle.dump(best_model, f)
-print(f" Model saved: {model_path}")
+    print(f"\nRegistered {MODEL_NAME} v{version} as 'candidate' ({best})")
+    for k, v in metrics.items():
+        print(f"  {k}: {v:.4f}")
+    print("Next: python promote_model.py")
 
-# Save scaler (if used)
-if use_scaling:
-    scaler_path = 'models/scaler.pkl'
-    with open(scaler_path, 'wb') as f:
-        pickle.dump(scaler, f)
-    print(f" Scaler saved: {scaler_path}")
 
-# Save label encoders
-encoders_path = 'models/label_encoders.pkl'
-with open(encoders_path, 'wb') as f:
-    pickle.dump(label_encoders, f)
-print(f" Label encoders saved: {encoders_path}")
-
-# Save feature names
-feature_names_path = 'models/feature_names.pkl'
-with open(feature_names_path, 'wb') as f:
-    pickle.dump(X.columns.tolist(), f)
-print(f" Feature names saved: {feature_names_path}")
-
-# Save metadata
-metadata = {
-    'model_type': best_name,
-    'use_scaling': use_scaling,
-    'features': X.columns.tolist(),
-    'categorical_features': categorical_cols,
-    'numerical_features': numerical_cols,
-    'train_samples': len(X_train),
-    'test_samples': len(X_test),
-    'accuracy': best_model.score(X_test_scaled if use_scaling else X_test, y_test),
-    'roc_auc': rf_auc if best_name == "RandomForest" else lr_auc,
-    'churn_rate': (df['Churn'] == 'Yes').mean()
-}
-
-metadata_path = 'models/metadata.pkl'
-with open(metadata_path, 'wb') as f:
-    pickle.dump(metadata, f)
-print(f" Metadata saved: {metadata_path}")
-
-print("\n" + "="*60)
-print(" TRAINING COMPLETE!")
-print("="*60)
-print(f"\nModel: {best_name}")
-print(f"Accuracy: {metadata['accuracy']:.3f}")
-print(f"ROC-AUC: {metadata['roc_auc']:.3f}")
-print(f"\nNext step: Build FastAPI wrapper in app/main.py")
+if __name__ == "__main__":
+    main()

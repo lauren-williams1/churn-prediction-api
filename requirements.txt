@@ -31,3 +31,8 @@ pydantic==2.5.3          # Data validation using Python type hints
 
 # Utilities
 python-multipart==0.0.6  # For handling file uploads (future use)
+
+
+mlflow>=2.14,<3.0
+joblib
+pytestpytest

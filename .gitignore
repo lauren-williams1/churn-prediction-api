@@ -144,6 +144,12 @@ ENV/
 env.bak/
 venv.bak/
 
+# MLFlow
+mlflow.db
+mlruns/
+mlartifacts/
+.venv/
+
 # Spyder project settings
 .spyderproject
 .spyproject

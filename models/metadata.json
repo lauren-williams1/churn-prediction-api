@@ -1,0 +1,13 @@
+{
+  "model_name": "churn-model",
+  "model_type": "logistic_regression",
+  "version": "1",
+  "run_id": "02f7c774d7c6468fb6723fcd1a868899",
+  "metrics": {
+    "test_roc_auc": 0.8416388953473353,
+    "test_accuracy": 0.7381121362668559,
+    "test_precision": 0.504302925989673,
+    "test_recall": 0.7834224598930482,
+    "test_f1": 0.6136125654450262
+  }
+}
