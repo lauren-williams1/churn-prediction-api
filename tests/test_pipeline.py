@@ -24,7 +24,7 @@ def _toy_data(n=400):
     return X, y
 
 
-CATEGORICAL = ["Contract", "InternetService"]
+CATEGORICAL = ["Contract", "mlflow ui --backend-store-uri sqlite:///mlflow.dbInternetService"]
 
 
 @pytest.mark.parametrize("name", ["random_forest", "logistic_regression"])
